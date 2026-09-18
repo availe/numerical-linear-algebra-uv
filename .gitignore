@@ -1,2 +1,11 @@
-nbs/.ipynb_checkpoints
-/.idea
+.venv/
+.idea/
+**/.ipynb_checkpoints/
+__pycache__/
+.pytest_cache/
+nbs/data/
+nbs/*.npy
+nbs/*.h5
+nbs/image1.jpg
+nbs/__temp__*
+notebook-reports/

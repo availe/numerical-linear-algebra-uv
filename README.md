@@ -9,36 +9,104 @@
 
 ## Quick setup
 
-Install [uv](https://docs.astral.sh/uv/), then from the project root run:
+Install [uv](https://docs.astral.sh/uv/) (validated with 0.12.10), clone this fork,
+and from the project root run:
 
 ```bash
-uv sync
+uv sync --locked
+uv run --locked jupyter lab nbs
 ```
 
-You may use whichever method you wish to run the notebooks. If you prefer JupyterLab, you can launch it from the terminal via the following command:
+uv installs **Python 3.14.7** (if needed) and the exact dependencies in `uv.lock`.
+No separate pip/Conda installation or GPU is required. The target platforms are
+macOS 14+ on Apple Silicon, Linux x86-64, and Windows x86-64. The locked modern
+PyTorch release does not provide an Intel macOS wheel. The environment includes all
+libraries used by the lessons and assignments, plus the optional Git/validation tools.
+The latest compatible releases were resolved for this fork; `uv.lock` keeps a fresh
+clone reproducible instead of picking new versions on each installation. MoviePy
+currently constrains Pillow to 11.x, so that transitive constraint is respected.
+
+In PyCharm, select the project's `.venv/bin/python` interpreter (Windows:
+`.venv\Scripts\python.exe`) and its Jupyter kernel. Start notebooks with their working
+directory set to `nbs`, so relative image and data paths resolve. Restart the kernel
+and run cells in order when switching lessons.
+
+### Data, exercises, and hardware
+
+- **Lessons 0, 1, 4, 5, 6, 8 and homework:** local or bundled/generated data.
+- **Lesson 2:** downloads the original 20 Newsgroups data on first use.
+- **Convolution:** downloads the fixed MNIST OpenML dataset (ID 554). Both scikit-learn
+  downloads cache under `nbs/data/sklearn/`; first use requires internet access.
+- **Lesson 3:** uses `nbs/data/Video_003.avi` if you supply the original BMC 2012
+  real video 003 referenced in the lesson. Otherwise it announces and uses a
+  deterministic synthetic clip with a stationary background and moving foreground.
+  This preserves the robust-PCA exercise but does not reproduce the original images.
+  Video encoding uses the FFmpeg binary bundled by `imageio-ffmpeg`.
+- **Lesson 7:** streams the first 100,000 triples of each original DBpedia 3.5.1 file
+  into a local sample cache and verifies its SHA-256 checksums. This keeps the graph example manageable on a laptop;
+  rankings differ from the full lecture dataset. Set `FULL_DATA = True` in its data
+  cell for the original files (about 890 MB compressed, with substantially more RAM
+  needed for the full graph). Sample and full caches are separate.
+- **Exercises stay unfinished.** Cells marked `exercise-dependent` require your
+  preceding answers, such as `LU_pivot`, the error plot, or shifted QR. Complete them
+  before running those cells interactively. Homework 3 deliberately raises
+  `NotImplementedError` if you call its unimplemented function.
+- PyTorch uses CUDA when available and otherwise CPU. The dense SVDs, optimization
+  loops and timing comparisons can still be slow and memory intensive on CPU.
+  Results can vary slightly between platforms/BLAS implementations; timings are
+  hardware dependent. The supplied `.xlsm` files remain spreadsheet exercises and
+  require an application that supports their Excel features/macros.
+
+### Validate or upgrade the environment
 
 ```bash
-uv run jupyter lab
+uv run --locked python scripts/check-notebooks.py
+uv run --locked pytest -q
+# Execute all notebooks in temporary copies; may take a long time and download data:
+uv run --locked python scripts/check-notebooks.py --execute
+# Or execute one lesson:
+uv run --locked python scripts/check-notebooks.py --execute --notebook "5.*"
 ```
+
+The checker validates every notebook and Python cell. Execution skips only explicitly
+marked exercise-dependent cells, reports each skip, and fails on other errors.
+Executed copies are saved in ignored `notebook-reports/`, preserving lesson files
+and their historical outputs. GitHub Actions checks the locked environment and runs
+focused tests plus self-contained notebooks on Linux, macOS, and Windows.
+
+To deliberately adopt future releases, run `uv lock --upgrade`, then `uv sync --locked`
+and the validation commands before committing the updated lockfile. Update
+`.python-version` deliberately for a new Python patch release; the project currently
+supports the 3.14 series. Commit `pyproject.toml`, `.python-version`, and `uv.lock`
+together. Do not commit `.venv` or downloaded/generated data.
 
 ## Optional: cleaner Git diffs for Jupyter notebooks
 
-This tells Git to ignore noisy Jupyter execution metadata such as execution counts and execution timing while preserving notebook outputs.
+The filter removes noisy execution metadata while **preserving outputs, cell IDs,
+and lesson display metadata**. This is appropriate for a teaching repository whose
+rendered outputs are useful to readers. It does not strip sensitive output: review
+notebook output before committing your work.
 
-This is optional and is **not required to set up the repository**.
-
-### macOS / Linux
+After `uv sync --locked`, run:
 
 ```bash
+# macOS / Linux
 ./scripts/setup-git.sh
+# Windows: Git Bash or WSL
+bash scripts/setup-git.sh
 ```
 
-### Windows
+This only configures the current checkout. It does not rewrite or stage notebooks.
+It uses `uv run --no-sync`, so Git operations never update the environment or access
+the network. Because the filter is required once configured, retain the synced
+`.venv` or re-run `uv sync --locked` if Git reports a missing filter tool. Cloning and
+running the course does not require this optional setup.
 
-Using Git Bash or WSL:
+To remove this local configuration:
 
 ```bash
-bash scripts/setup-git.sh
+git config --local --remove-section filter.nbstripout
+git config --local --remove-section diff.ipynb
 ```
 
 ---

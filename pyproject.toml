@@ -1,16 +1,33 @@
 [project]
 name = "numerical-linear-algebra-uv"
 version = "0.1.0"
-requires-python = ">=3.14"
+description = "A reproducible environment for fast.ai computational linear algebra lessons"
+requires-python = ">=3.14,<3.15"
 dependencies = [
-    "ipykernel>=7.3.0",
-    "jupyterlab>=4.6.3",
-    "numpy>=2.5.3",
-    "scikit-learn>=1.9.1",
+    "ipython>=9,<10",
+    "ipykernel>=6.29,<8",
+    "jupyterlab>=4.4,<5",
+    "ipywidgets>=8.1,<9",
+    "numpy>=2.2,<3",
+    "scipy>=1.15,<2",
+    "scikit-learn>=1.7,<2",
+    "matplotlib>=3.10,<4",
+    "pandas>=3,<4",
+    "numba>=0.61,<1",
+    "torch>=2.7,<3",
+    "moviepy>=2.2,<3",
+    "pillow>=11,<13",
+    "imageio-ffmpeg>=0.6,<1",
+    "scikit-image>=0.25,<1",
+    "fbpca==1.0",
+    "psutil>=7,<8",
+    "tqdm>=4.67,<5",
+    "joblib>=1.4,<2",
+    "tables>=3.10,<4",
 ]
 
 [dependency-groups]
-dev = [
-    "nbstripout>=0.9.1",
-    "scipy-stubs>=1.18.1.0",
-]
+dev = ["nbstripout>=0.9,<1", "nbclient>=0.10,<1", "pytest>=8,<10", "nbformat>=5.10,<6"]
+
+[tool.uv]
+package = false

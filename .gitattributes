@@ -1,2 +1,2 @@
-*.ipynb filter=nbstripout
-*.ipynb diff=ipynb
+*.ipynb filter=nbstripout diff=ipynb
+*.sh text eol=lf
