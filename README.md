@@ -1,3 +1,48 @@
+# numerical-linear-algebra-uv
+
+> [!NOTE]
+> This is an unofficial fork of fast.ai's
+> [numerical-linear-algebra](https://github.com/fastai/numerical-linear-algebra)
+> course repository.
+>
+> This fork adds a reproducible Python environment using [uv](https://docs.astral.sh/uv/).
+
+## Quick setup
+
+Install [uv](https://docs.astral.sh/uv/), then from the project root run:
+
+```bash
+uv sync
+```
+
+You may use whichever method you wish to run the notebooks. If you prefer JupyterLab, you can launch it from the terminal via the following command:
+
+```bash
+uv run jupyter lab
+```
+
+## Optional: cleaner Git diffs for Jupyter notebooks
+
+This tells Git to ignore noisy Jupyter execution metadata such as execution counts and execution timing while preserving notebook outputs.
+
+This is optional and is **not required to set up the repository**.
+
+### macOS / Linux
+
+```bash
+./scripts/setup-git.sh
+```
+
+### Windows
+
+Using Git Bash or WSL:
+
+```bash
+bash scripts/setup-git.sh
+```
+
+---
+
 ## Computational Linear Algebra for Coders
 
 This course is focused on the question: **How do we do matrix computations with acceptable speed and acceptable accuracy?**
