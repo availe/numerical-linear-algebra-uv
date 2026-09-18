@@ -27,7 +27,13 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["nbstripout>=0.9,<1", "nbclient>=0.10,<1", "pytest>=8,<10", "nbformat>=5.10,<6"]
+dev = [
+    "nbstripout>=0.9,<1",
+    "nbclient>=0.10,<1",
+    "pytest>=8,<10",
+    "nbformat>=5.10,<6",
+    "scipy-stubs>=1.18.1.0",
+]
 
 [tool.uv]
 package = false
