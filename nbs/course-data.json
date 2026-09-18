@@ -1,0 +1,17 @@
+{
+  "Video_003.avi": {
+    "url": "https://raw.githubusercontent.com/momonala/image-processing-projects/e0cfb1c3cb6391a2edff174f9d6c251d48b03fe4/background_removal/video/Video_003/Video_003.avi",
+    "sha256": "604d4bc860aefaeca60db48c8a4ad6e49d61fa82f60f3be4392b7a4c05e521c3",
+    "size": 1270784
+  },
+  "dbpedia/redirects_en.nt.bz2": {
+    "url": "https://downloads.dbpedia.org/3.5.1/en/redirects_en.nt.bz2",
+    "sha256": "1259786eae2499418da8284c29c58c5fe3bbccdfca869463a69405da33fecf01",
+    "size": 59120685
+  },
+  "dbpedia/page_links_en.nt.bz2": {
+    "url": "https://downloads.dbpedia.org/3.5.1/en/page_links_en.nt.bz2",
+    "sha256": "c7b400f23a6b7254fda47f99181370b1da2759c5d3bedead01acc46c71ea85dd",
+    "size": 874842814
+  }
+}
