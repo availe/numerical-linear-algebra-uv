@@ -21,6 +21,13 @@ You may use whichever method you wish to run the notebooks. If you prefer Jupyte
 uv run jupyter lab
 ```
 
+Notebook 3 (Background Removal with Robust PCA) uses `nbs/data/Video_003.avi`
+if you provide the original BMC video. Otherwise, its first run downloads and
+caches the real surveillance preview embedded in the original course notebook.
+That first download requires internet access; subsequent runs use the local cache.
+The notebook samples five frames per second at 25% resolution by default.
+Downloaded video and generated arrays/images stay in the ignored `nbs/data/` folder.
+
 ## Optional: cleaner Git diffs for Jupyter notebooks
 
 This tells Git to ignore noisy Jupyter execution metadata such as execution counts and execution timing while preserving notebook outputs.
