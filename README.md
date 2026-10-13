@@ -114,15 +114,18 @@ Run once in each clone, from the repository root:
 
 ```sh
 uv sync --locked
-git config --local filter.nbstripout.clean 'uv run --locked python scripts/notebook_clean.py filter'
-git config --local filter.nbstripout.smudge cat
-git config --local filter.nbstripout.required true
-git config --local core.hooksPath .githooks
+uv run --locked python scripts/notebook_clean.py install
 ```
 
-If you already use a custom hooks directory, integrate the command in
-`.githooks/pre-commit` into your existing hook instead of replacing `core.hooksPath`.
-Git and your IDE must be able to find `uv` on PATH.
+`.gitattributes` is versioned, but Git filter commands and hook activation are
+**local to each clone**. Git silently passes notebooks through if the named filter
+is not configured; copying or cloning this repository does not install it.
+The installer records the active Python executable's absolute path for both the
+filter and hook, so PyCharm does not need `uv` on its PATH when staging or committing.
+You can also run `scripts/notebook_clean.py install` with PyCharm's project interpreter.
+Re-run installation after moving the clone or changing its Python environment.
+Installation refuses to replace an existing custom hooks directory or active
+default pre-commit hook; integrate those hooks into `.githooks` first.
 
 The required clean filter strips outputs, execution counts, and **all** notebook
 and cell metadata when staging `.ipynb` files. Local outputs remain visible after
@@ -134,6 +137,55 @@ objects and null execution counts remain because the notebook schema requires
 them. With kernel metadata removed, your editor may ask you to choose a kernel;
 tags and metadata-dependent extensions are intentionally not preserved in Git.
 
+An IDE's raw file comparison may still show local output or metadata. Check
+`git diff --cached` to see what will actually be committed. Error outputs from
+failed cells are stripped too. The hook validates staged content at commit time;
+it does not clear a notebook when you run or save a cell.
+
+### Empty changes in GitHub Desktop after running cells
+
+Git can report a notebook as modified based on its saved size and timestamps,
+even when `git diff` is empty after applying the clean filter. GitHub Desktop
+then lists the notebook with "No content changes found"; terminal `git status`
+can show the same modification. The saved outputs are local, not staged changes.
+
+To clear these output-only entries without staging source edits:
+
+```sh
+uv run --locked python scripts/notebook_clean.py refresh
+```
+
+You can limit this to one notebook with `--path "nbs/7. PageRank with Eigen Decompositions.ipynb"`.
+The command compares cleaned working files with the **index**, refreshes a private
+copy of that index, and installs it only if every staged blob, mode and reported
+file flag remains unchanged. Local outputs, real edits and partial staging are
+preserved. If another Git operation holds the index lock, refresh skips the update;
+run it again after that operation finishes.
+
+For automatic refresh in PyCharm, enable the bundled **File Watchers** plugin,
+open **Settings → Tools → File Watchers**, and import
+[`scripts/pycharm-notebook-watcher.xml`](scripts/pycharm-notebook-watcher.xml).
+Enable **Notebook Git status** at the project level. The template uses
+`.venv/bin/python`, watches Jupyter notebook saves (including external saves),
+and runs even when a course cell contains syntax errors. Adjust the program path
+if your project interpreter lives elsewhere. Each clone needs its own watcher
+and the filter installation above; `.idea` is intentionally ignored by Git.
+
+The watcher leaves outputs available in PyCharm and clears execution-only Git
+entries shortly after a save. A brief modified entry while the watcher runs is
+possible. Source or Markdown edits still appear normally for review and staging.
+
+To clean previously staged or committed snapshots while keeping local outputs:
+
+```sh
+git add --renormalize -- '*.[iI][pP][yY][nN][bB]'
+uv run --locked python scripts/notebook_clean.py check
+```
+
+Renormalization stages the full current contents of tracked notebooks, including
+source edits; finish any partial-staging work first. Commit the resulting cleanup
+normally. Existing commits are not rewritten.
+
 To erase current local outputs too, then stage the cleaned tracked notebooks:
 
 ```sh
@@ -142,19 +194,17 @@ git add --renormalize -- '*.ipynb'
 uv run --locked python scripts/notebook_clean.py check
 ```
 
-The pre-commit hook and CI validate the **actual Git index blobs**, never a
+The pre-commit hook validates the **actual Git index blobs**, never a
 repaired notebook or a potentially different working copy. All tracked notebooks
-are checked, including unchanged and partially staged files. In a fresh CI
-checkout these blobs are the checked-out commit's contents. Invalid JSON, invalid
+are checked, including unchanged and partially staged files. Invalid JSON, invalid
 notebook structure, missing/duplicate required IDs, and unsupported formats fail
 closed. Existing nbformat 4.1/4.2 notebooks need no added IDs; nbformat 4.5 requires
 them. Validation never executes cells or automatically fixes the index.
 
-After pushing this workflow, make **Notebook hygiene** a required status check
-in GitHub's branch rules, require pull requests, and disallow bypasses. CI is the
-authoritative check for contributors who have not installed the local filter or
-hook. Local hooks can be bypassed; CI detects a dirty committed snapshot but
-cannot prevent someone creating a local commit or pushing to an unprotected
-branch. It does not inspect every intermediate commit or rewrite old history.
-Require squash merges if intermediate PR commits must not enter the protected
-branch's history. Changes to this policy and its workflow also require review.
+Notebook hygiene is checked locally; this repository has no GitHub Actions
+workflow for it. Each contributor must install the local filter and hook.
+Run the cleanup tooling's tests manually with:
+
+```sh
+uv run --locked python -m unittest discover -s tests
+```

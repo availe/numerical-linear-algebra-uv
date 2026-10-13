@@ -1,2 +1,6 @@
 #!/bin/sh
-exec uv run --locked python scripts/notebook_clean.py check
+notebook_python=$(git config --local --get notebook-clean.python) || {
+    echo "Notebook hook is not configured. Run: uv run --locked python scripts/notebook_clean.py install" >&2
+    exit 1
+}
+exec "$notebook_python" scripts/notebook_clean.py check

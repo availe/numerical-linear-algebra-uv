@@ -4,8 +4,10 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
+import tempfile
 
 import nbformat
 from nbformat.validator import iter_validate
@@ -76,6 +78,41 @@ def git(*args):
     return subprocess.check_output(["git", *args])
 
 
+def install():
+    """Configure this clone using the interpreter that ran the installer."""
+    hook_config = subprocess.run(
+        ["git", "config", "--get", "core.hooksPath"],
+        stdout=subprocess.PIPE, check=False,
+    )
+    if hook_config.returncode not in (0, 1):
+        raise ValueError("could not read core.hooksPath")
+    hooks_path = os.fsdecode(hook_config.stdout).strip()
+    if hooks_path and hooks_path != ".githooks":
+        raise ValueError(
+            f"core.hooksPath is already {hooks_path!r}; integrate the notebook "
+            "check into that hook before switching to .githooks"
+        )
+    if not hooks_path:
+        default_hook = Path(os.fsdecode(git("rev-parse", "--git-path", "hooks/pre-commit")).strip())
+        if default_hook.is_file() and os.access(default_hook, os.X_OK):
+            raise ValueError("an active pre-commit hook exists; integrate it into .githooks first")
+
+    # Do not resolve symlinks: a venv's Python can point to the base interpreter.
+    python = os.path.abspath(sys.executable)
+    command = shlex.join([python, "scripts/notebook_clean.py", "filter"])
+    settings = {
+        "filter.nbstripout.clean": command,
+        "filter.nbstripout.smudge": "cat",
+        "filter.nbstripout.required": "true",
+        "notebook-clean.python": python,
+        "core.hooksPath": ".githooks",
+    }
+    for key, value in settings.items():
+        git("config", "--local", key, value)
+    print(f"Installed notebook filter and pre-commit hook using {python}.")
+    print("Re-run install after moving the clone or changing its Python environment.")
+
+
 def tracked_notebooks():
     for entry in git("ls-files", "--stage", "-z").split(b"\0"):
         if not entry:
@@ -90,15 +127,85 @@ def tracked_notebooks():
         yield path, oid
 
 
+def refresh_status(paths):
+    """Refresh file stats without changing any staged content or index flags."""
+    index = Path(os.fsdecode(git("rev-parse", "--git-path", "index")).rstrip("\n")).absolute()
+    if not index.exists() or not paths:
+        return 0
+    lock_path = Path(str(index) + ".lock")
+    try:
+        lock = lock_path.open("xb")
+    except FileExistsError:
+        print("Git index is busy; refresh skipped. Retry after the Git operation finishes.")
+        return 0
+    owns_lock = True
+    try:
+        with lock, tempfile.TemporaryDirectory(prefix="notebook-refresh-", dir=index.parent) as folder:
+            original = index.read_bytes()
+            temporary_index = Path(folder) / "index"
+            temporary_index.write_bytes(original)
+            env = dict(os.environ, GIT_INDEX_FILE=str(temporary_index), GIT_OPTIONAL_LOCKS="0")
+
+            def temporary_git(*args):
+                # User hooks must not run against our private index. Keep flags
+                # unchanged even if core.ignorestat is enabled in another clone.
+                return subprocess.check_output([
+                    "git", "-c", f"core.hooksPath={os.devnull}",
+                    "-c", "core.fsmonitor=false", "-c", "core.ignorestat=false",
+                    "--literal-pathspecs", *args,
+                ], env=env)
+
+            before = temporary_git("ls-files", "--stage", "-v", "-z")
+            candidates = []
+            for path in paths:
+                file = Path(path)
+                if not file.is_file() or file.is_symlink():
+                    continue
+                # Compare with the index, not HEAD: retain partial staging.
+                staged = temporary_git("show", ":" + path)
+                if clean(file.read_bytes()) == staged:
+                    candidates.append(path)
+            if not candidates:
+                return 0
+            temporary_git("add", "--", *candidates)
+            if temporary_git("ls-files", "--stage", "-v", "-z") != before:
+                # A source/mode change during the comparison must never get staged.
+                print("Notebook content changed during refresh; Git index left untouched.")
+                return 0
+            if index.read_bytes() != original:
+                raise ValueError("Git index changed during refresh; retry")
+            lock.write(temporary_index.read_bytes())
+            lock.flush()
+            os.fsync(lock.fileno())
+        os.replace(lock_path, index)
+        owns_lock = False
+        return len(candidates)
+    finally:
+        if owns_lock:
+            lock_path.unlink(missing_ok=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("filter", "strip", "check"))
+    parser.add_argument("command", choices=("install", "filter", "strip", "check", "refresh"))
+    parser.add_argument("--path", action="append", default=[], help="Only refresh this notebook (repeatable)")
     args = parser.parse_args()
+    requested = {Path(path).absolute() for path in args.path}
+    if requested and args.command != "refresh":
+        parser.error("--path is only supported with refresh")
     if args.command == "filter":
         sys.stdout.buffer.write(clean(sys.stdin.buffer.read()))
         return
 
     os.chdir(os.fsdecode(git("rev-parse", "--show-toplevel").rstrip(b"\n")))
+    if args.command == "install":
+        install()
+        return
+    if args.command == "refresh":
+        paths = [path for path, _ in tracked_notebooks() if not requested or Path(path).absolute() in requested]
+        count = refresh_status(paths)
+        print(f"Refreshed {count} notebooks; staged content and local outputs are unchanged.")
+        return
     failures = 0
     count = 0
     for path, oid in tracked_notebooks():
