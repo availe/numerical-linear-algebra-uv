@@ -1,2 +1,6 @@
 nbs/.ipynb_checkpoints
 /.idea
+
+.venv/
+__pycache__/
+.ipynb_checkpoints/

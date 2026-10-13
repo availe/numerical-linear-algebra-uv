@@ -101,3 +101,60 @@ If you took the fast.ai deep learning course, that is what we used.  You can hea
 All that to say, don't worry if you don't understand everything at first!  You're not supposed to.  We will start using some "black boxes" or matrix decompositions that haven't yet been explained, and then we'll dig into the lower level details later.
 
 To start, focus on what things DO, not what they ARE.
+
+## Notebook Git hygiene (this fork)
+
+Use [uv](https://docs.astral.sh/uv/getting-started/installation/) for dependencies.
+Python is pinned to 3.15.0, the latest stable release when this setup was added.
+Only notebook cleanup tooling is installed for now; the course dependencies and
+notebook execution will be repaired separately. Use a current uv release if it
+cannot download this Python version.
+
+Run once in each clone, from the repository root:
+
+```sh
+uv sync --locked
+git config --local filter.nbstripout.clean 'uv run --locked python scripts/notebook_clean.py filter'
+git config --local filter.nbstripout.smudge cat
+git config --local filter.nbstripout.required true
+git config --local core.hooksPath .githooks
+```
+
+If you already use a custom hooks directory, integrate the command in
+`.githooks/pre-commit` into your existing hook instead of replacing `core.hooksPath`.
+Git and your IDE must be able to find `uv` on PATH.
+
+The required clean filter strips outputs, execution counts, and **all** notebook
+and cell metadata when staging `.ipynb` files. Local outputs remain visible after
+running cells. The wrapper clears metadata before calling nbstripout, so arbitrary
+keys, `keep_output` tags/flags, and `init_cell` cannot preserve outputs. It ignores
+nbstripout's optional global settings and preserves cell source, cell order,
+existing IDs, Markdown attachments, and notebook format versions. Empty metadata
+objects and null execution counts remain because the notebook schema requires
+them. With kernel metadata removed, your editor may ask you to choose a kernel;
+tags and metadata-dependent extensions are intentionally not preserved in Git.
+
+To erase current local outputs too, then stage the cleaned tracked notebooks:
+
+```sh
+uv run --locked python scripts/notebook_clean.py strip
+git add --renormalize -- '*.ipynb'
+uv run --locked python scripts/notebook_clean.py check
+```
+
+The pre-commit hook and CI validate the **actual Git index blobs**, never a
+repaired notebook or a potentially different working copy. All tracked notebooks
+are checked, including unchanged and partially staged files. In a fresh CI
+checkout these blobs are the checked-out commit's contents. Invalid JSON, invalid
+notebook structure, missing/duplicate required IDs, and unsupported formats fail
+closed. Existing nbformat 4.1/4.2 notebooks need no added IDs; nbformat 4.5 requires
+them. Validation never executes cells or automatically fixes the index.
+
+After pushing this workflow, make **Notebook hygiene** a required status check
+in GitHub's branch rules, require pull requests, and disallow bypasses. CI is the
+authoritative check for contributors who have not installed the local filter or
+hook. Local hooks can be bypassed; CI detects a dirty committed snapshot but
+cannot prevent someone creating a local commit or pushing to an unprotected
+branch. It does not inspect every intermediate commit or rewrite old history.
+Require squash merges if intermediate PR commits must not enter the protected
+branch's history. Changes to this policy and its workflow also require review.

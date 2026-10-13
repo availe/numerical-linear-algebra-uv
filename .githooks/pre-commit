@@ -1,0 +1,2 @@
+#!/bin/sh
+exec uv run --locked python scripts/notebook_clean.py check

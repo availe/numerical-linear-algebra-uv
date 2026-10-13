@@ -1,0 +1,11 @@
+[project]
+name = "numerical-linear-algebra-uv"
+version = "0.1.0"
+requires-python = ">=3.15"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "nbformat>=5.11.1,<6",
+    "nbstripout>=0.9.1,<0.10",
+]
