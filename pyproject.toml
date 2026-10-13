@@ -12,4 +12,5 @@ dependencies = [
 dev = [
     "nbformat>=5.11.1,<6",
     "nbstripout>=0.9.1,<0.10",
+    "scipy-stubs>=1.18.1.1",
 ]
