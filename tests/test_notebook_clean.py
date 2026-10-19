@@ -5,6 +5,7 @@ from contextlib import chdir
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,7 @@ import tempfile
 from typing import Any
 import unittest
 from unittest.mock import patch
+from xml.etree import ElementTree
 
 from scripts.notebook_clean import clean, read_notebook, refresh_status
 
@@ -80,7 +82,11 @@ class GitIntegrationTests(unittest.TestCase):
                 del self.env[key]
         self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", PATH=os.defpath)
         self.run_command("git", "init", "-q")
-        for name in ("scripts/notebook_clean.py", ".githooks/pre-commit", ".gitattributes"):
+        for name in (
+            "scripts/notebook_clean.py", "scripts/pycharm-notebook-watcher.xml",
+            ".githooks/pre-commit", ".gitattributes", ".gitignore",
+            ".idea/watcherTasks.xml", ".idea/externalDependencies.xml",
+        ):
             target = self.repo / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, target)
@@ -132,6 +138,83 @@ class GitIntegrationTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(self.run_command("git", "config", "--get", "core.hooksPath").stdout.strip(), b"custom-hooks")
         self.assertEqual(self.run_command("git", "config", "--get", "filter.nbstripout.clean", check=False).returncode, 1)
+
+    def test_shared_watcher_bootstraps_a_fresh_clone_without_manual_install(self):
+        # Commit only the portable setup, then exercise the exact watcher command
+        # in a real clone with no inherited Git settings and a path with spaces.
+        self.run_command("git", "add", ".")
+        self.run_command(
+            "git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+            "commit", "-qm", "Shared notebook setup",
+        )
+        clone = self.repo / "fresh clone"
+        self.run_command("git", "clone", "-q", "--no-local", str(self.repo), str(clone))
+        self.repo = clone
+        self.assertEqual(self.run_command("git", "config", "--get", "filter.nbstripout.clean", check=False).returncode, 1)
+        self.assertEqual(
+            self.run_command("git", "ls-files", ".idea").stdout.splitlines(),
+            [b".idea/externalDependencies.xml", b".idea/watcherTasks.xml"],
+        )
+        self.assertEqual(self.run_command("git", "check-ignore", ".idea/workspace.xml").returncode, 0)
+
+        # Reuse the test environment's dependencies instead of downloading the
+        # course's large packages. No .ipynb working file is created or changed.
+        (clone / ".venv").symlink_to(sys.prefix, target_is_directory=True)
+        watcher = ElementTree.parse(clone / ".idea/watcherTasks.xml").find("component/TaskOptions")
+        assert watcher is not None
+        self.assertEqual(watcher.attrib["isEnabled"], "true")
+        template = ElementTree.parse(clone / "scripts/pycharm-notebook-watcher.xml").find("TaskOptions")
+        assert template is not None
+        options = {item.attrib["name"]: item.attrib["value"] for item in watcher.findall("option")}
+        self.assertEqual(options, {item.attrib["name"]: item.attrib["value"] for item in template.findall("option")})
+        self.assertEqual(options["fileExtension"], "ipynb")
+
+        def expand(value):
+            return value.replace("$ProjectFileDir$", str(clone)).replace("$FilePath$", str(clone / "Notebook with spaces.ipynb"))
+
+        command = [expand(options["program"]), *shlex.split(expand(options["arguments"]))]
+        before_index = self.run_command("git", "ls-files", "--stage", "-v").stdout
+        result = self.run_command(*command)
+        self.assertIn(b"Installed notebook filter", result.stdout)
+        self.assertEqual(self.run_command("git", "ls-files", "--stage", "-v").stdout, before_index)
+        self.assertEqual(self.run_command("git", "config", "--get", "notebook-clean.python").stdout.strip(), os.fsencode(command[0]))
+        config = clone / ".git/config"
+        config_before = (config.read_bytes(), config.stat().st_mtime_ns)
+        self.assertNotIn(b"Installed", self.run_command(*command).stdout)
+        self.assertEqual((config.read_bytes(), config.stat().st_mtime_ns), config_before)
+
+        staged = self.stage_blob(filtered=True)
+        self.assertEqual(staged, clean(json.dumps(executed_notebook()).encode()))
+        self.run_command("git", "hook", "run", "pre-commit")
+
+    def test_refresh_repairs_stale_interpreter_paths_and_missing_settings(self):
+        self.install()
+        self.run_command("git", "config", "filter.nbstripout.clean", "/old/clone/.venv/bin/python scripts/notebook_clean.py filter")
+        self.run_command("git", "config", "notebook-clean.python", "/old/clone/.venv/bin/python")
+        self.run_command("git", "config", "--unset", "filter.nbstripout.required")
+        self.run_command(sys.executable, "scripts/notebook_clean.py", "refresh")
+        self.assertEqual(self.run_command("git", "config", "--get", "notebook-clean.python").stdout.strip(), os.fsencode(sys.executable))
+        staged = self.stage_blob(filtered=True)
+        self.assertEqual(staged, clean(json.dumps(executed_notebook()).encode()))
+        self.run_command("git", "hook", "run", "pre-commit")
+
+    def test_automatic_install_preserves_custom_hooks(self):
+        self.run_command("git", "config", "core.hooksPath", "custom-hooks")
+        config_before = (self.repo / ".git/config").read_bytes()
+        result = self.run_command(sys.executable, "scripts/notebook_clean.py", "refresh", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"integrate the notebook check", result.stderr)
+        self.assertEqual((self.repo / ".git/config").read_bytes(), config_before)
+
+    def test_automatic_install_preserves_active_default_pre_commit(self):
+        hook = self.repo / ".git/hooks/pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n")
+        hook.chmod(0o755)
+        config_before = (self.repo / ".git/config").read_bytes()
+        result = self.run_command(sys.executable, "scripts/notebook_clean.py", "refresh", check=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"an active pre-commit hook exists", result.stderr)
+        self.assertEqual((self.repo / ".git/config").read_bytes(), config_before)
 
     def refresh_fixture(self):
         # Exercise real Git filtering with a JSON fixture, without writing .ipynb files.

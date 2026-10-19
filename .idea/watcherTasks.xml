@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectTasksOptions">
+    <TaskOptions isEnabled="true">
+      <option name="name" value="Notebook Git status" />
+      <option name="description" value="Refresh output-only notebook changes without staging source edits" />
+      <option name="fileExtension" value="ipynb" />
+      <option name="scopeName" value="Project Files" />
+      <option name="program" value="$ProjectFileDir$/.venv/bin/python" />
+      <option name="arguments" value="&quot;$ProjectFileDir$/scripts/notebook_clean.py&quot; refresh --path &quot;$FilePath$&quot;" />
+      <option name="workingDir" value="$ProjectFileDir$" />
+      <option name="output" value="" />
+      <option name="outputFromStdout" value="false" />
+      <option name="checkSyntaxErrors" value="false" />
+      <option name="immediateSync" value="true" />
+      <option name="runOnExternalChanges" value="true" />
+      <option name="trackOnlyRoot" value="false" />
+      <option name="exitCodeBehavior" value="ERROR" />
+      <envs />
+    </TaskOptions>
+  </component>
+</project>

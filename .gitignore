@@ -1,5 +1,8 @@
 nbs/.ipynb_checkpoints
-/.idea
+# Share the notebook watcher; keep personal IDE state local.
+/.idea/*
+!/.idea/watcherTasks.xml
+!/.idea/externalDependencies.xml
 
 .venv/
 __pycache__/

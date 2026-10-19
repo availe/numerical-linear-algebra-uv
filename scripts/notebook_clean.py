@@ -78,6 +78,18 @@ def git(*args):
     return subprocess.check_output(["git", *args])
 
 
+def installation_settings():
+    # Do not resolve symlinks: a venv's Python can point to the base interpreter.
+    python = os.path.abspath(sys.executable)
+    return {
+        "filter.nbstripout.clean": shlex.join([python, "scripts/notebook_clean.py", "filter"]),
+        "filter.nbstripout.smudge": "cat",
+        "filter.nbstripout.required": "true",
+        "notebook-clean.python": python,
+        "core.hooksPath": ".githooks",
+    }
+
+
 def install():
     """Configure this clone using the interpreter that ran the installer."""
     hook_config = subprocess.run(
@@ -97,20 +109,24 @@ def install():
         if default_hook.is_file() and os.access(default_hook, os.X_OK):
             raise ValueError("an active pre-commit hook exists; integrate it into .githooks first")
 
-    # Do not resolve symlinks: a venv's Python can point to the base interpreter.
-    python = os.path.abspath(sys.executable)
-    command = shlex.join([python, "scripts/notebook_clean.py", "filter"])
-    settings = {
-        "filter.nbstripout.clean": command,
-        "filter.nbstripout.smudge": "cat",
-        "filter.nbstripout.required": "true",
-        "notebook-clean.python": python,
-        "core.hooksPath": ".githooks",
-    }
+    settings = installation_settings()
     for key, value in settings.items():
         git("config", "--local", key, value)
+    python = settings["notebook-clean.python"]
     print(f"Installed notebook filter and pre-commit hook using {python}.")
-    print("Re-run install after moving the clone or changing its Python environment.")
+    print("Notebook saves automatically repair this setup if the interpreter path changes.")
+
+
+def ensure_installed():
+    """Bootstrap a fresh clone from the shared IDE watcher, without repeat writes."""
+    configured = {}
+    for entry in git("config", "--local", "--null", "--list").split(b"\0"):
+        if entry:
+            key, _, value = entry.partition(b"\n")
+            configured[os.fsdecode(key)] = os.fsdecode(value)
+    if any(configured.get(key.lower()) != value for key, value in installation_settings().items()):
+        # Reuse the installer so existing custom hooks are still protected.
+        install()
 
 
 def tracked_notebooks():
@@ -202,6 +218,7 @@ def main():
         install()
         return
     if args.command == "refresh":
+        ensure_installed()
         paths = [path for path, _ in tracked_notebooks() if not requested or Path(path).absolute() in requested]
         count = refresh_status(paths)
         print(f"Refreshed {count} notebooks; staged content and local outputs are unchanged.")
