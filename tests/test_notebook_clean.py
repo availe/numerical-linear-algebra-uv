@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import patch
 from xml.etree import ElementTree
 
-from scripts.notebook_clean import clean, read_notebook, refresh_status
+from scripts.notebook_clean import check_notebook, clean, main, read_notebook, refresh_status
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +36,17 @@ def executed_notebook() -> dict[str, Any]:
                 "outputs": [
                     {"output_type": "stream", "name": "stdout", "text": "hello\n"},
                     {"output_type": "error", "ename": "ValueError", "evalue": "failed", "traceback": ["failed"]},
+                    {
+                        "output_type": "execute_result",
+                        "execution_count": 3,
+                        "metadata": {"execution": {"timestamp": "noise"}},
+                        "data": {"text/plain": ["array([1., 2.])"], "text/html": "<table><tr><td>1</td></tr></table>"},
+                    },
+                    {
+                        "output_type": "display_data",
+                        "metadata": {"arbitrary": "noise"},
+                        "data": {"image/png": "aGVsbG8=", "text/plain": "<Figure>"},
+                    },
                 ],
             },
             {
@@ -68,6 +79,37 @@ class CleanerTests(unittest.TestCase):
         del notebook["cells"][0]["id"]
         with self.assertRaises(ValueError):
             read_notebook(json.dumps(notebook))
+
+    def test_homework_keeps_results_and_images_but_removes_metadata_and_counts(self):
+        original = executed_notebook()
+        expected = copy.deepcopy(original)
+        expected["metadata"] = {}
+        for cell in expected["cells"]:
+            cell["metadata"] = {}
+        code = expected["cells"][0]
+        code["execution_count"] = None
+        code["outputs"][2]["metadata"] = {}
+        code["outputs"][2]["execution_count"] = None
+        code["outputs"][3]["metadata"] = {}
+
+        result = clean(json.dumps(original).encode(), path="hw/3.ipynb")
+        self.assertEqual(read_notebook(result), expected)
+        self.assertEqual(clean(result, path="hw/3.ipynb"), result)
+        check_notebook(read_notebook(result), path="hw/3.ipynb")
+        with self.assertRaisesRegex(ValueError, "outputs must be empty"):
+            check_notebook(read_notebook(result), path="nbs/3.ipynb")
+
+    def test_only_root_homework_folder_keeps_outputs(self):
+        data = json.dumps(executed_notebook()).encode()
+        for path, expected in (
+            ("hw/3.ipynb", True), ("hw/nested/3.IPYNB", True),
+            ("./hw/3.ipynb", True), (None, False), ("3.ipynb", False),
+            ("nbs/3.ipynb", False), ("hw-old/3.ipynb", False),
+            ("nbs/hw/3.ipynb", False),
+        ):
+            with self.subTest(path=path):
+                result = read_notebook(clean(data, path=path))
+                self.assertEqual(bool(result["cells"][0]["outputs"]), expected)
 
 
 class GitIntegrationTests(unittest.TestCase):
@@ -102,12 +144,13 @@ class GitIntegrationTests(unittest.TestCase):
     def install(self, **kwargs):
         return self.run_command(sys.executable, "scripts/notebook_clean.py", "install", **kwargs)
 
-    def stage_blob(self, *, filtered):
+    def stage_blob(self, *, filtered, path="Executed notebook.IPYNB", notebook=None):
         args = ["git", "hash-object", "-w", "--stdin"]
         if filtered:
-            args.append("--path=Executed notebook.IPYNB")
-        oid = self.run_command(*args, data=json.dumps(executed_notebook()).encode()).stdout.strip().decode()
-        self.run_command("git", "update-index", "--add", "--cacheinfo", "100644", oid, "Executed notebook.IPYNB")
+            args.append("--path=" + path)
+        data = json.dumps(executed_notebook() if notebook is None else notebook).encode()
+        oid = self.run_command(*args, data=data).stdout.strip().decode()
+        self.run_command("git", "update-index", "--add", "--cacheinfo", "100644", oid, path)
         return self.run_command("git", "cat-file", "blob", oid).stdout
 
     def test_install_is_repeatable_and_filters_staged_content_without_uv_on_path(self):
@@ -124,6 +167,39 @@ class GitIntegrationTests(unittest.TestCase):
         result = self.run_command("git", "hook", "run", "pre-commit", check=False)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(b"metadata must be empty", result.stderr)
+
+    def test_git_filter_and_hook_keep_homework_outputs_with_quoted_paths(self):
+        self.install()
+        path = "hw/nested/Executed 'notebook' $result.IPYNB"
+        staged = self.stage_blob(filtered=True, path=path)
+        self.assertEqual(staged, clean(json.dumps(executed_notebook()).encode(), path=path))
+        self.assertEqual(len(read_notebook(staged)["cells"][0]["outputs"]), 4)
+        self.run_command("git", "hook", "run", "pre-commit")
+
+    def test_hook_rejects_homework_metadata_and_execution_counts(self):
+        self.install()
+        path = "hw/3.ipynb"
+        cleaned = clean(json.dumps(executed_notebook()).encode(), path=path)
+        for location, key, value, message in (
+            ("notebook", "metadata", {"noise": True}, b"metadata must be empty"),
+            ("cell", "metadata", {"noise": True}, b"metadata must be empty"),
+            ("cell", "execution_count", 42, b"execution_count must be null"),
+            ("result", "metadata", {"noise": True}, b"metadata must be empty"),
+            ("result", "execution_count", 42, b"execution_count must be null"),
+            ("display", "metadata", {"noise": True}, b"metadata must be empty"),
+        ):
+            with self.subTest(location=location, key=key):
+                notebook = read_notebook(cleaned)
+                cell = notebook["cells"][0]
+                target = {
+                    "notebook": notebook, "cell": cell,
+                    "result": cell["outputs"][2], "display": cell["outputs"][3],
+                }[location]
+                target[key] = value
+                self.stage_blob(filtered=False, path=path, notebook=notebook)
+                result = self.run_command("git", "hook", "run", "pre-commit", check=False)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(message, result.stderr)
 
     def test_required_filter_rejects_invalid_input(self):
         self.install()
@@ -198,6 +274,16 @@ class GitIntegrationTests(unittest.TestCase):
         self.assertEqual(staged, clean(json.dumps(executed_notebook()).encode()))
         self.run_command("git", "hook", "run", "pre-commit")
 
+    def test_refresh_upgrades_old_filter_to_pass_notebook_paths(self):
+        self.install()
+        old_filter = shlex.join([sys.executable, "scripts/notebook_clean.py", "filter"])
+        self.run_command("git", "config", "filter.nbstripout.clean", old_filter)
+        result = self.run_command(sys.executable, "scripts/notebook_clean.py", "refresh")
+        self.assertIn(b"Installed notebook filter", result.stdout)
+        staged = self.stage_blob(filtered=True, path="hw/3.ipynb")
+        self.assertEqual(len(read_notebook(staged)["cells"][0]["outputs"]), 4)
+        self.run_command("git", "hook", "run", "pre-commit")
+
     def test_automatic_install_preserves_custom_hooks(self):
         self.run_command("git", "config", "core.hooksPath", "custom-hooks")
         config_before = (self.repo / ".git/config").read_bytes()
@@ -216,20 +302,56 @@ class GitIntegrationTests(unittest.TestCase):
         self.assertIn(b"an active pre-commit hook exists", result.stderr)
         self.assertEqual((self.repo / ".git/config").read_bytes(), config_before)
 
-    def refresh_fixture(self):
+    def refresh_fixture(self, path="Executed notebook.data"):
         # Exercise real Git filtering with a JSON fixture, without writing .ipynb files.
         self.install()
         with (self.repo / ".gitattributes").open("a") as attributes:
             attributes.write("\n*.data filter=nbstripout\n")
-        file = self.repo / "Executed notebook.data"
-        file.write_bytes(clean(json.dumps(executed_notebook()).encode()))
-        self.run_command("git", "add", "--", file.name)
+        file = self.repo / path
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(clean(json.dumps(executed_notebook()).encode(), path=path))
+        self.run_command("git", "add", "--", path)
         file.write_text(json.dumps(executed_notebook()))
         return file
 
     def refresh(self, file):
         with chdir(self.repo), patch.dict(os.environ, self.env, clear=True):
-            return refresh_status([file.name])
+            return refresh_status([file.relative_to(self.repo).as_posix()])
+
+    def test_homework_refresh_clears_metadata_only_status_and_keeps_local_outputs(self):
+        path = "hw/nested/Executed notebook.data"
+        file = self.refresh_fixture(path)
+        staged = self.run_command("git", "ls-files", "--stage", "-v").stdout
+        original = file.read_bytes()
+        self.assertTrue(self.run_command("git", "status", "--porcelain", "--", path).stdout.startswith(b"AM "))
+        self.assertEqual(self.refresh(file), 1)
+        self.assertEqual(self.run_command("git", "ls-files", "--stage", "-v").stdout, staged)
+        self.assertTrue(self.run_command("git", "status", "--porcelain", "--", path).stdout.startswith(b"A  "))
+        self.assertEqual(file.read_bytes(), original)
+
+    def test_homework_refresh_preserves_unstaged_output_changes(self):
+        path = "hw/Executed notebook.data"
+        file = self.refresh_fixture(path)
+        notebook = executed_notebook()
+        notebook["cells"][0]["outputs"][0]["text"] = "a different result\n"
+        file.write_text(json.dumps(notebook))
+        original_index = (self.repo / ".git/index").read_bytes()
+        self.assertEqual(self.refresh(file), 0)
+        self.assertEqual((self.repo / ".git/index").read_bytes(), original_index)
+        self.assertTrue(self.run_command("git", "status", "--porcelain", "--", path).stdout.startswith(b"AM "))
+
+    def test_strip_keeps_homework_results_and_cleans_metadata(self):
+        path = "hw/Executed notebook.data"
+        file = self.refresh_fixture(path)
+        with (
+            chdir(self.repo), patch.dict(os.environ, self.env, clear=True),
+            patch("scripts.notebook_clean.tracked_notebooks", return_value=[(path, "unused")]),
+            patch.object(sys, "argv", ["notebook_clean.py", "strip"]),
+        ):
+            main()
+        result = read_notebook(file.read_bytes())
+        self.assertEqual(len(result["cells"][0]["outputs"]), 4)
+        check_notebook(result, path=path)
 
     def test_refresh_clears_output_only_status_and_preserves_local_outputs(self):
         file = self.refresh_fixture()

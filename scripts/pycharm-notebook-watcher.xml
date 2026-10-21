@@ -1,7 +1,7 @@
 <TaskOptions>
   <TaskOptions isEnabled="true">
     <option name="name" value="Notebook Git status" />
-    <option name="description" value="Refresh output-only notebook changes without staging source edits" />
+    <option name="description" value="Refresh notebook Git status without staging content changes" />
     <option name="fileExtension" value="ipynb" />
     <option name="scopeName" value="Project Files" />
     <option name="program" value="$ProjectFileDir$/.venv/bin/python" />

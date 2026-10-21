@@ -3,7 +3,7 @@
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import shlex
 import subprocess
 import sys
@@ -46,30 +46,43 @@ def read_notebook(data):
     return notebook
 
 
-def check_notebook(notebook):
+def keep_outputs(path):
+    """Git supplies repository-relative paths, including for nested homework."""
+    return path is not None and PurePosixPath(path).parts[:1] == ("hw",)
+
+
+def check_notebook(notebook, *, path=None):
     if notebook["metadata"] != {}:
         raise ValueError("notebook metadata must be empty")
     for index, cell in enumerate(notebook["cells"]):
         if cell["metadata"] != {}:
             raise ValueError(f"cell {index}: metadata must be empty")
         if cell["cell_type"] == "code":
-            if cell["outputs"] != []:
+            if not keep_outputs(path) and cell["outputs"] != []:
                 raise ValueError(f"cell {index}: outputs must be empty")
             if cell["execution_count"] is not None:
                 raise ValueError(f"cell {index}: execution_count must be null")
+            for output_index, output in enumerate(cell["outputs"]):
+                if output.get("metadata", {}) != {}:
+                    raise ValueError(f"cell {index}, output {output_index}: metadata must be empty")
+                if output.get("execution_count") is not None:
+                    raise ValueError(f"cell {index}, output {output_index}: execution_count must be null")
 
 
-def clean(data):
+def clean(data, *, path=None):
     notebook = nbformat.from_dict(read_notebook(data))
     # Clear all keys BEFORE nbstripout sees keep_output, tags or init_cell.
     notebook.metadata = {}
     for cell in notebook.cells:
         cell.metadata = {}
+        for output in cell.get("outputs", []):
+            if "metadata" in output:
+                output.metadata = {}
     strip_output(
-        notebook, keep_output=False, keep_count=False, keep_id=True,
+        notebook, keep_output=keep_outputs(path), keep_count=False, keep_id=True,
         strip_init_cells=True,
     )
-    check_notebook(notebook)
+    check_notebook(notebook, path=path)
     # Preserve the original source representation, IDs, attachments and version.
     return (json.dumps(notebook, ensure_ascii=False, indent=1, sort_keys=True) + "\n").encode("utf-8")
 
@@ -82,7 +95,8 @@ def installation_settings():
     # Do not resolve symlinks: a venv's Python can point to the base interpreter.
     python = os.path.abspath(sys.executable)
     return {
-        "filter.nbstripout.clean": shlex.join([python, "scripts/notebook_clean.py", "filter"]),
+        # Git shell-quotes %f itself, so filenames with spaces/quotes stay intact.
+        "filter.nbstripout.clean": shlex.join([python, "scripts/notebook_clean.py", "filter"]) + " --path=%f",
         "filter.nbstripout.smudge": "cat",
         "filter.nbstripout.required": "true",
         "notebook-clean.python": python,
@@ -179,7 +193,7 @@ def refresh_status(paths):
                     continue
                 # Compare with the index, not HEAD: retain partial staging.
                 staged = temporary_git("show", ":" + path)
-                if clean(file.read_bytes()) == staged:
+                if clean(file.read_bytes(), path=path) == staged:
                     candidates.append(path)
             if not candidates:
                 return 0
@@ -204,15 +218,21 @@ def refresh_status(paths):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("install", "filter", "strip", "check", "refresh"))
-    parser.add_argument("--path", action="append", default=[], help="Only refresh this notebook (repeatable)")
+    parser.add_argument(
+        "--path", action="append", default=[],
+        help="Repository-relative filter path, or notebook to refresh (repeatable for refresh)",
+    )
     args = parser.parse_args()
-    requested = {Path(path).absolute() for path in args.path}
-    if requested and args.command != "refresh":
-        parser.error("--path is only supported with refresh")
+    if args.path and args.command not in ("filter", "refresh"):
+        parser.error("--path is only supported with filter or refresh")
     if args.command == "filter":
-        sys.stdout.buffer.write(clean(sys.stdin.buffer.read()))
+        if len(args.path) > 1:
+            parser.error("filter accepts only one --path")
+        path = args.path[0] if args.path else None
+        sys.stdout.buffer.write(clean(sys.stdin.buffer.read(), path=path))
         return
 
+    requested = {Path(path).absolute() for path in args.path}
     os.chdir(os.fsdecode(git("rev-parse", "--show-toplevel").rstrip(b"\n")))
     if args.command == "install":
         install()
@@ -230,13 +250,13 @@ def main():
         try:
             if args.command == "check":
                 # Blob IDs read the staged snapshot, including partially staged files.
-                check_notebook(read_notebook(git("cat-file", "blob", oid)))
+                check_notebook(read_notebook(git("cat-file", "blob", oid)), path=path)
             else:
                 file = Path(path)
                 if file.is_symlink():
                     raise ValueError("refusing to strip a symlink")
                 original = file.read_bytes()
-                cleaned = clean(original)
+                cleaned = clean(original, path=path)
                 if original != cleaned:
                     file.write_bytes(cleaned)
         except (ValueError, OSError) as error:
